@@ -81,6 +81,9 @@ woodwork = "==0.31.0"
 zict = "==3.0.0"
 zipcodes = "==1.2.0"
 zipp = "==3.20.2"
+html5lib = "*"
+beautifulsoup4 = "*"
+lxml = "*"
 
 [dev-packages]
 
