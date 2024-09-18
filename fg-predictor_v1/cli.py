@@ -4,7 +4,6 @@ import polars as pl
 from thefuzz import process
 from typing import List, Tuple
 
-
 def load_model_and_data(model_path: str, data_path: str):
     model_data = joblib.load(model_path)
     model = model_data['model']
@@ -13,24 +12,44 @@ def load_model_and_data(model_path: str, data_path: str):
     return model, df_prepared, feature_names
 
 def predict_game(model, home_team: str, away_team: str, season_data: pl.DataFrame, feature_names: list) -> dict:
-    home_stats = season_data.filter(pl.col("Team") == home_team).select(feature_names)
-    away_stats = season_data.filter(pl.col("Team") == away_team).select(feature_names)
+    home_stats = season_data.filter(pl.col("Team") == home_team)
+    away_stats = season_data.filter(pl.col("Team") == away_team)
     
     if home_stats.is_empty() or away_stats.is_empty():
         return {"error": "One or both teams not found in the data"}
     
-    home_prediction = model.predict(home_stats.to_numpy())[0] / 16
-    away_prediction = model.predict(away_stats.to_numpy())[0] / 16
+    # Use the most recent year's data
+    home_stats_recent = home_stats.sort("Year", descending=True).head(1)
+    away_stats_recent = away_stats.sort("Year", descending=True).head(1)
+    
+    # Get league average Opp_FG_Per_Game
+    league_avg_opp_fg = season_data.select('Opp_FG_Per_Game').mean().item()
+    
+    # Get Opp_FG_Per_Game for each team
+    home_opp_fg = home_stats_recent.select('Opp_FG_Per_Game').item()
+    away_opp_fg = away_stats_recent.select('Opp_FG_Per_Game').item()
+    
+    # Calculate adjustment factors (inverse of opponent's FG allowed per game)
+    home_adjustment = league_avg_opp_fg / away_opp_fg if away_opp_fg else 1
+    away_adjustment = league_avg_opp_fg / home_opp_fg if home_opp_fg else 1
+    
+    # Make predictions
+    home_prediction = model.predict(home_stats_recent.select(feature_names).to_numpy())[0] / 16
+    away_prediction = model.predict(away_stats_recent.select(feature_names).to_numpy())[0] / 16
+    
+    # Apply adjustments
+    home_prediction_adjusted = home_prediction * home_adjustment
+    away_prediction_adjusted = away_prediction * away_adjustment
     
     return {
         "home_team": home_team,
         "away_team": away_team,
-        "home_fg_prediction": home_prediction,
-        "away_fg_prediction": away_prediction,
-        "total_fg_prediction": home_prediction + away_prediction,
-        "home_prob_1.7_plus_fg": float(home_prediction >= 1.7),
-        "away_prob_1.7_plus_fg": float(away_prediction >= 1.7),
-        "prob_1.7_plus_fg": float(home_prediction + away_prediction >= 1.7)
+        "home_fg_prediction": home_prediction_adjusted,
+        "away_fg_prediction": away_prediction_adjusted,
+        "total_fg_prediction": home_prediction_adjusted + away_prediction_adjusted,
+        "home_prob_1.7_plus_fg": float(home_prediction_adjusted >= 1.7),
+        "away_prob_1.7_plus_fg": float(away_prediction_adjusted >= 1.7),
+        "prob_1.7_plus_fg": float(home_prediction_adjusted + away_prediction_adjusted >= 1.7)
     }
 
 def get_team_names(df: pl.DataFrame) -> List[str]:
