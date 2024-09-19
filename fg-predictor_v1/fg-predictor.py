@@ -5,7 +5,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from typing import Dict, Any
 import joblib
-import csv
 
 def load_data(fg_path: str, opp_fg_path: str) -> pl.DataFrame:
     df_fg = pl.read_csv(fg_path)
@@ -17,7 +16,7 @@ def load_data(fg_path: str, opp_fg_path: str) -> pl.DataFrame:
     return df_combined
 
 def engineer_features(df: pl.DataFrame) -> pl.DataFrame:
-    return df.with_columns([
+    df_engineered = df.with_columns([
         (pl.col("FGM") / pl.col("Att")).alias("FG_Success_Rate"),
         pl.col("50-59 > A-M").str.split("_").list.get(1).cast(pl.Int64).alias("50-59_Made"),
         pl.col("60+ > A-M").str.split("_").list.get(1).cast(pl.Int64).alias("60+_Made"),
@@ -31,9 +30,35 @@ def engineer_features(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col("FG Blk") / pl.col("Att")).alias("FG_Block_Rate")
     ])
 
-def prepare_data_for_modeling(file_path: str, opp_fg_path: str) -> pl.DataFrame:
-    df_raw = load_data(file_path, opp_fg_path)
-    return engineer_features(df_raw)
+    # Calculate league average Opp_FG_Per_Game
+    league_avg_opp_fg = df_engineered["Opp_FG_Per_Game"].mean()
+
+    # Add a column for relative opponent strength
+    df_engineered = df_engineered.with_columns([
+        (pl.col("Opp_FG_Per_Game") / league_avg_opp_fg).alias("Relative_Opp_Strength")
+    ])
+
+    return df_engineered
+
+def prepare_data_for_modeling(df: pl.DataFrame) -> Dict[str, Any]:
+    feature_columns = [
+        "Att", "FG %", "20-29 > A-M", "30-39 > A-M",
+        "40-49 > A-M", "Lng", "FG_Success_Rate", "Long_FG_Made", 
+        "Long_FG_Att", "Long_FG_Success_Rate", "FG_Block_Rate",
+        "Relative_Opp_Strength"
+    ]
+    X = df.select(feature_columns)
+    y = df['FGM']
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    return {
+        'X_train': X_train,
+        'X_test': X_test,
+        'y_train': y_train,
+        'y_test': y_test,
+        'feature_names': feature_columns
+    }
 
 def split_data(df: pl.DataFrame, test_size: float = 0.2, random_state: int = 42) -> Dict[str, Any]:
     feature_columns = [
@@ -109,8 +134,8 @@ def main():
     df_prepared = engineer_features(df_combined)
     print(f"Prepared data for {len(df_prepared)} team-seasons")
     
-    print("\nSplitting data into train and test sets...")
-    data_split = split_data(df_prepared)
+    print("\nPreparing data for modeling...")
+    data_split = prepare_data_for_modeling(df_prepared)
     
     print("\nTraining XGBoost model...")
     model = train_model(data_split['X_train'], data_split['y_train'])

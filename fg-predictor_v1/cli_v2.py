@@ -3,12 +3,55 @@ import joblib
 import polars as pl
 from thefuzz import process
 from typing import List, Tuple
+import numpy as np
+
+def standardize_team_names(df: pl.DataFrame, column: str) -> pl.DataFrame:
+    team_name_mapping = {
+        "49ers": "San Francisco",
+        "Niners": "San Francisco",
+        "Bears": "Chicago",
+        "Bengals": "Cincinnati",
+        "Bills": "Buffalo",
+        "Broncos": "Denver",
+        "Browns": "Cleveland",
+        "Buccaneers": "Tampa Bay",
+        "Cardinals": "Arizona",
+        "Chargers": "LA Chargers",
+        "Chiefs": "Kansas City",
+        "Colts": "Indianapolis",
+        "Cowboys": "Dallas",
+        "Dolphins": "Miami",
+        "Eagles": "Philadelphia",
+        "Falcons": "Atlanta",
+        "Giants": "NY Giants",
+        "Jaguars": "Jacksonville",
+        "Jets": "NY Jets",
+        "Lions": "Detroit",
+        "Packers": "Green Bay",
+        "Panthers": "Carolina",
+        "Patriots": "New England",
+        "Raiders": "Las Vegas",
+        "Rams": "LA Rams",
+        "Ravens": "Baltimore",
+        "Redskins": "Washington",
+        "Saints": "New Orleans",
+        "Seahawks": "Seattle",
+        "Steelers": "Pittsburgh",
+        "Texans": "Houston",
+        "Titans": "Tennessee",
+        "Vikings": "Minnesota",
+        "Football Team": "Washington",
+        "Commanders": "Washington"
+    }
+    
+    return df.with_columns(pl.col(column).replace(team_name_mapping))
 
 def load_model_and_data(model_path: str, data_path: str):
     model_data = joblib.load(model_path)
     model = model_data['model']
     feature_names = model_data['feature_names']
     df_prepared = pl.read_parquet(data_path)
+    df_prepared = standardize_team_names(df_prepared, "Team")
     return model, df_prepared, feature_names
 
 def predict_game(model, home_team: str, away_team: str, season_data: pl.DataFrame, feature_names: list) -> dict:
@@ -30,16 +73,20 @@ def predict_game(model, home_team: str, away_team: str, season_data: pl.DataFram
     away_opp_fg = away_stats_recent.select('Opp_FG_Per_Game').item()
     
     # Calculate relative opponent strength
-    home_relative_strength = away_opp_fg / league_avg_opp_fg
-    away_relative_strength = home_opp_fg / league_avg_opp_fg
+    home_relative_strength = away_opp_fg / league_avg_opp_fg if league_avg_opp_fg else 1
+    away_relative_strength = home_opp_fg / league_avg_opp_fg if league_avg_opp_fg else 1
     
     # Prepare feature vectors
-    home_features = home_stats_recent.select(feature_names[:-1]).with_columns(pl.lit(home_relative_strength).alias("Relative_Opp_Strength"))
-    away_features = away_stats_recent.select(feature_names[:-1]).with_columns(pl.lit(away_relative_strength).alias("Relative_Opp_Strength"))
+    home_features = home_stats_recent.select(feature_names)
+    away_features = away_stats_recent.select(feature_names)
+    
+    # Update Relative_Opp_Strength for prediction
+    home_features = home_features.with_columns(pl.lit(home_relative_strength).alias("Relative_Opp_Strength"))
+    away_features = away_features.with_columns(pl.lit(away_relative_strength).alias("Relative_Opp_Strength"))
     
     # Make predictions
-    home_prediction = model.predict(home_features.to_numpy())[0] / 16
-    away_prediction = model.predict(away_features.to_numpy())[0] / 16
+    home_prediction = model.predict(home_features.to_numpy())[0]
+    away_prediction = model.predict(away_features.to_numpy())[0]
     
     return {
         "home_team": home_team,
@@ -63,8 +110,8 @@ def main():
         print("Usage: python cli.py 'Home Team' 'Away Team'")
         sys.exit(1)
 
-    model_path = "assets/model_assets/nfl_fg_model.joblib"
-    data_path = "assets/model_assets/nfl_fg_data.parquet"
+    model_path = "assets/model_assets/new_nfl_fg_model.joblib"
+    data_path = "assets/model_assets/new_nfl_fg_data.parquet"
 
     try:
         model, df_prepared, feature_names = load_model_and_data(model_path, data_path)
@@ -88,7 +135,7 @@ def main():
         if confirm.lower() != 'y':
             print("Prediction cancelled.")
             sys.exit(0)
-    
+
     prediction = predict_game(model, home_team_match, away_team_match, df_prepared, feature_names)
 
     if "error" in prediction:
